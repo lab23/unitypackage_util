@@ -3,7 +3,7 @@ name: Rust (Windows Only)
 on:
   push:
     branches: [ "main" ]
-    tags: [ "*" ]          # build + publish on tags
+    tags: [ "*" ]          # publish on any tag push
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
@@ -12,66 +12,56 @@ env:
   CARGO_TERM_COLOR: always
 
 permissions:
-  contents: write           # needed by softprops/action-gh-release
+  contents: write           # needed to publish a Release
 
 jobs:
-  build-windows:
+  build-and-release-windows:
     runs-on: windows-2022
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # Optional: pin toolchain; remove if you already have Rust in the image
+      # - name: Rust toolchain
+      #   uses: dtolnay/rust-toolchain@stable
+
       - name: Cargo build (release)
-        run: cargo build --verbose --release
         shell: bash
+        run: cargo build --verbose --release
 
       - name: Run unitypackage_util help
-        run: ./target/release/unitypackage_util.exe --help
         shell: bash
+        run: ./target/release/unitypackage_util.exe --help
 
       - name: Prepare artifact folder
+        shell: pwsh
         run: |
-          set -euo pipefail
-          export TARGET=unitypackage_util-windows-x86_64
-          mkdir -p "$TARGET"
-          cp LICENSE "$TARGET/unitypackage_util-License.txt"
-          cp target/release/unitypackage_util.exe "$TARGET/unitypackage_util-windows-x86_64.exe"
-        shell: bash
+          $Env:TARGET = "unitypackage_util-windows-x86_64"
+          New-Item -ItemType Directory -Path $Env:TARGET | Out-Null
+          Copy-Item LICENSE "$Env:TARGET/unitypackage_util-License.txt"
+          Copy-Item "target/release/unitypackage_util.exe" "$Env:TARGET/unitypackage_util-windows-x86_64.exe"
+          Get-ChildItem -Recurse $Env:TARGET
 
-      - name: Upload artifact (Windows)
+      - name: Zip artifact
+        shell: pwsh
+        run: |
+          $Env:TARGET = "unitypackage_util-windows-x86_64"
+          Compress-Archive -Path $Env:TARGET -DestinationPath "$Env:TARGET.zip" -Force
+          Get-ChildItem "$Env:TARGET.zip"
+
+      - name: Upload workflow artifact (for Actions UI)
         uses: actions/upload-artifact@v4
         with:
           name: unitypackage_util-windows-x86_64
-          path: unitypackage_util-windows-x86_64/**
+          path: |
+            unitypackage_util-windows-x86_64/**
+            unitypackage_util-windows-x86_64.zip
           if-no-files-found: error
           retention-days: 30
-          include-hidden-files: false
 
-  release:
-    runs-on: ubuntu-latest
-    needs: [build-windows]
-    steps:
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: unitypackage_util-windows-x86_64
-          path: dist/unitypackage_util-windows-x86_64
-
-      - name: List contents
-        run: ls -R dist
-        shell: bash
-
-      - name: Zip Windows artifact
-        run: |
-          set -euo pipefail
-          cd dist
-          zip -r unitypackage_util-windows-x86_64.zip unitypackage_util-windows-x86_64
-          ls -lh *.zip
-        shell: bash
-
-      - name: Create GitHub Release (attach zip)
+      - name: Create GitHub Release (attach ZIP)
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
-            dist/*.zip
+            unitypackage_util-windows-x86_64.zip
